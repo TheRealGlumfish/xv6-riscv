@@ -143,6 +143,9 @@ void            trapinithart(void);
 extern struct spinlock tickslock;
 void            prepare_return(void);
 
+// serial.c
+void            serialinit(void);
+
 // uart.c
 void            uartinit(void);
 void            uartintr(void);
@@ -180,6 +183,12 @@ void            plic_complete(int);
 void            virtio_disk_init(void);
 void            virtio_disk_rw(struct buf *, int);
 void            virtio_disk_intr(void);
+
+// virtio_serial.c
+void            virtio_serial_init(void);
+void            virtio_serial_send(char *, uint32);
+uint32          virtio_serial_recv(char *, uint32);
+void            virtio_serial_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))

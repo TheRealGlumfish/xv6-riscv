@@ -23,6 +23,13 @@ main(void)
   dup(0);  // stdout
   dup(0);  // stderr
 
+  int serial_fd = open("serial", O_RDWR);
+  if(serial_fd < 0){
+    mknod("serial", SERIAL, 0);
+  } else{
+    close(serial_fd);
+  }
+
   for(;;){
     printf("init: starting sh\n");
     pid = fork();

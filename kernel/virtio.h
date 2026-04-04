@@ -11,10 +11,12 @@
 // from qemu virtio_mmio.h
 #define VIRTIO_MMIO_MAGIC_VALUE		0x000 // 0x74726976
 #define VIRTIO_MMIO_VERSION		0x004 // version; should be 2
-#define VIRTIO_MMIO_DEVICE_ID		0x008 // device type; 1 is net, 2 is disk
+#define VIRTIO_MMIO_DEVICE_ID		0x008 // device type; 1 is net, 2 is disk, 3 is console
 #define VIRTIO_MMIO_VENDOR_ID		0x00c // 0x554d4551
 #define VIRTIO_MMIO_DEVICE_FEATURES	0x010
+#define VIRTIO_MMIO_DEVICE_FEATURES_SEL 0x14
 #define VIRTIO_MMIO_DRIVER_FEATURES	0x020
+#define VIRTIO_MMIO_DRIVER_FEATURES_SEL 0x024
 #define VIRTIO_MMIO_QUEUE_SEL		0x030 // select queue, write-only
 #define VIRTIO_MMIO_QUEUE_NUM_MAX	0x034 // max size of current queue, read-only
 #define VIRTIO_MMIO_QUEUE_NUM		0x038 // size of current queue, write-only
@@ -35,6 +37,8 @@
 #define VIRTIO_CONFIG_S_DRIVER		2
 #define VIRTIO_CONFIG_S_DRIVER_OK	4
 #define VIRTIO_CONFIG_S_FEATURES_OK	8
+#define VIRTIO_CONFIG_S_DEVICE_NEEDS_RESET 64
+#define VIRTIO_CONFIG_S_FAILED 128
 
 // device feature bits
 #define VIRTIO_BLK_F_RO              5	/* Disk is read-only */
@@ -44,6 +48,10 @@
 #define VIRTIO_F_ANY_LAYOUT         27
 #define VIRTIO_RING_F_INDIRECT_DESC 28
 #define VIRTIO_RING_F_EVENT_IDX     29
+#define VIRTIO_F_VERSION_1          32
+#define VIRTIO_CONSOLE_F_SIZE        0
+#define VIRTIO_CONSOLE_F_MULTIPORT   1
+#define VIRTIO_CONSOLE_F_EMERG_WRITE 2
 
 // this many virtio descriptors.
 // must be a power of two.
