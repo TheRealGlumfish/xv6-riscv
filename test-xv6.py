@@ -7,14 +7,59 @@
 # ./test-xv6.py -q usertests (runs the quick tests of usertests)
 # ./test-xv6.py crash  (runs the crash tests)
 # ./test-xv6.py log (runs the log crash test)
+# ./test-xv6.py serial (runs the serial port tests)
 
-import argparse, os, inspect, re, signal, subprocess, sys, time
+import argparse, errno, os, inspect, re, signal, subprocess, sys, time
 from subprocess import run
 
 parser = argparse.ArgumentParser()
 parser.add_argument('testrex', help="test name or regular expression")
 parser.add_argument("-q", action='store_true', help="usertests quick")
 args = parser.parse_args()
+
+SERIAL_IN = "serial0.in"
+SERIAL_OUT = "serial0.out"
+
+def serial_drain(fd):
+    while True:
+        try:
+            data = os.read(fd, 4096) # TODO: Maybe change the number
+        except BlockingIOError:
+            return
+        if not data:
+            return
+
+def serial_read_exact(fd, length, timeout):
+    deadline = time.monotonic() + timeout
+    out = bytearray()
+    while len(out) < length and time.monotonic() < deadline:
+        try:
+            data = os.read(fd, length - len(out))
+        except BlockingIOError:
+            time.sleep(0.1)
+            continue
+        if data:
+            out.extend(data)
+        else:
+            time.sleep(0.1)
+    return bytes(out)
+
+def serial_write_in(payload, timeout):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fd = os.open(SERIAL_IN, os.O_WRONLY | os.O_NONBLOCK)
+            break
+        except OSError as err:
+            if err.errno != errno.ENXIO or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+    try:
+        total = 0
+        while total < len(payload):
+            total += os.write(fd, payload[total:])
+    finally:
+        os.close(fd)
 
 class QEMU(object):
 
@@ -184,6 +229,56 @@ def test_crash():
     test_log()
     test_forphan()
     test_dorphan()
+
+# TODO: Add more serial test cases
+def test_serial_write():
+    print("Test virtio-serial guest->host write")
+    q = QEMU(True)
+    outfd = os.open(SERIAL_OUT, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        serial_drain(outfd)
+        payload = b"virtio_guest_to_host"
+        q.cmd(f"serialtest write {payload.decode('utf-8')}\n")
+        data = serial_read_exact(outfd, len(payload), timeout=5)
+        if data != payload:
+            print("FAIL: guest->host serial payload mismatch")
+            sys.exit(1)
+        try:
+            extra = os.read(outfd, 1)
+        except BlockingIOError:
+            extra = None
+        if extra:
+            print("FAIL: guest->host serial produced extra output")
+            sys.exit(1)
+    finally:
+        os.close(outfd)
+        q.stop()
+    print("OK")
+
+def test_serial_read():
+    print("Test virtio-serial host->guest read")
+    q = QEMU(True)
+    outfd = os.open(SERIAL_OUT, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        serial_drain(outfd)
+        payload = b"virtio_host_to_guest"
+        q.cmd(f"serialtest loop {len(payload)}\n")
+        serial_write_in(payload, timeout=5)
+        data = serial_read_exact(outfd, len(payload), timeout=5)
+        if data != payload:
+            print("FAIL: host->guest serial payload mismatch after loopback")
+            sys.exit(1)
+        try:
+            extra = os.read(outfd, 1)
+        except BlockingIOError:
+            extra = None
+        if extra:
+            print("FAIL: host->guest serial produced extra output after loopback")
+            sys.exit(1)
+    finally:
+        os.close(outfd)
+        q.stop()
+    print("OK")
 
 def test_usertests(test=""):
     timeout = 600

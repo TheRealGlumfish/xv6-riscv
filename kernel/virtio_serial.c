@@ -134,8 +134,6 @@ virtio_serial_init(void)
   uint32 features_l = *R(VIRTIO_MMIO_DEVICE_FEATURES);
   *R(VIRTIO_MMIO_DEVICE_FEATURES_SEL) = 1;
   uint32 features_h = *R(VIRTIO_MMIO_DEVICE_FEATURES);
-  printf("virtio serial low features: 0x%x\n", features_l);
-  printf("virtio serial high features: 0x%x\n", features_h);
   if ((features_h & (1 << (VIRTIO_F_VERSION_1 - 32))) == 0) {
     panic("virtio serial is a legacy device");
   }
@@ -279,7 +277,6 @@ virtio_serial_recv(char *buf, uint32 len) {
 void
 virtio_serial_intr()
 {
-  printf("virtio_serial_intr\n");
   uint32 interrupt_status = *R(VIRTIO_MMIO_INTERRUPT_STATUS);
   if (interrupt_status & 0x2) {
     panic("virtio_serial_intr config change"); // configuration change event
