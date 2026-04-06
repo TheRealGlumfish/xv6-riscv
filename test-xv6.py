@@ -32,7 +32,7 @@ class QEMU(object):
 
     def reset_fs(self):
         try:
-            run(["rm", "fs.img"], check=True)
+            run(["rm", "fs.img"], check=False)
             run(["make", "fs.img"], check=True)
         except subprocess.CalledProcessError as e:
             print(f"Command failed with exit code {e.returncode}")
@@ -44,12 +44,11 @@ class QEMU(object):
             print(f"Command failed with exit code {e.returncode}")
 
     def save_output(self):
-      try:
-        with open("test-xv6.out", "w") as f:
-            f.write(self.out)
-            f.close()
-      except OSError as e:
-        print("Provided a bad results path. Error:", e)     
+        try:
+            with open("test-xv6.out", "w") as f:
+                f.write(self.output)
+        except OSError as e:
+            print("Provided a bad results path. Error:", e)
         
     def cmd(self, c):
         if isinstance(c, str):
@@ -62,7 +61,7 @@ class QEMU(object):
         kids = [int(line) for line in ps.stdout.splitlines()]
         if len(kids) == 0:
             print("no qemu")
-            os.exit(1)
+            sys.exit(1)
         print("kill", kids[0])
         os.kill(kids[0], signal.SIGKILL)
 
@@ -77,7 +76,7 @@ class QEMU(object):
     def lines(self):
         return self.output.splitlines()
 
-    def error(self):
+    def error(self, regexps):
         print("FAIL: match failed", regexps)
         self.save_output()
         self.stop()
@@ -91,19 +90,19 @@ class QEMU(object):
                 print(line)
                 last = i
         if last == -1 and exit:
-            self.error()
+            self.error(regexps)
         l = ""
         if last >= 0:
             l = lines[last]
         return last >= 0, l
 
     def monitor(self, *regexps, progress="", timeout):
-        deadline = time.time() + timeout
+        deadline = time.monotonic() + timeout
         while True:
             time.sleep(1)
-            timeleft = deadline - time.time()
+            timeleft = deadline - time.monotonic()
             if timeleft < 0:
-                self.error()
+                self.error(regexps)
             self.read()
             ok, _ = self.match(*regexps, exit=False)
             if ok:
