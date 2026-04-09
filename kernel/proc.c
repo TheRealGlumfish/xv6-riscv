@@ -33,7 +33,7 @@ void
 proc_mapstacks(pagetable_t kpgtbl)
 {
   struct proc *p;
-  
+
   for(p = proc; p < &proc[NPROC]; p++) {
     char *pa = kalloc();
     if(pa == 0)
@@ -48,7 +48,7 @@ void
 procinit(void)
 {
   struct proc *p;
-  
+
   initlock(&pid_lock, "nextpid");
   initlock(&wait_lock, "wait_lock");
   for(p = proc; p < &proc[NPROC]; p++) {
@@ -93,7 +93,7 @@ int
 allocpid()
 {
   int pid;
-  
+
   acquire(&pid_lock);
   pid = nextpid;
   nextpid = nextpid + 1;
@@ -223,7 +223,7 @@ userinit(void)
 
   p = allocproc();
   initproc = p;
-  
+
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -352,7 +352,7 @@ kexit(int status)
 
   // Parent might be sleeping in wait().
   wakeup(p->parent);
-  
+
   acquire(&p->lock);
 
   p->xstate = status;
@@ -408,7 +408,7 @@ kwait(uint64 addr)
       release(&wait_lock);
       return -1;
     }
-    
+
     // Wait for a child to exit.
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
@@ -543,7 +543,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   // Must acquire p->lock in order to
   // change p->state and then call sched.
   // Once we hold p->lock, we can be
@@ -622,7 +622,7 @@ int
 killed(struct proc *p)
 {
   int k;
-  
+
   acquire(&p->lock);
   k = p->killed;
   release(&p->lock);
@@ -687,4 +687,40 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// Populate buf with an array of struct uproc containing all
+// valid (not UNUSED or USED) processes in the process table.
+// Returns the number of entries written to buf.
+int
+procstat(struct uproc *buf)
+{
+  uint n = 0; // The number of valid entries in buf.
+  struct proc *p;
+
+  acquire(&wait_lock);
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->state != USED) {
+      buf->state = p->state;
+      buf->xstate = p->xstate;
+      buf->pid = p->pid;
+      buf->sz = p->sz;
+      safestrcpy(buf->name, p->name, sizeof(p->name));
+      release(&p->lock);
+      if(p->parent) {
+        acquire(&p->parent->lock);
+        buf->ppid = p->parent->pid;
+        release(&p->parent->lock);
+      } else {
+        buf->ppid = 0; // Should only happen for init process.
+      }
+      n++;
+      buf++;
+    } else {
+      release(&p->lock);
+    }
+  }
+  release(&wait_lock);
+  return n;
 }

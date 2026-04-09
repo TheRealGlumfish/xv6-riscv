@@ -107,3 +107,33 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// Populate buf with an array of up to sz uproc structs.
+// The number of entries written to buf might be smaller
+// than sz, depending on how many valid processes exist.
+// On success, return the number of valid processes,
+// on error, return -1.
+uint64
+sys_pstat(void)
+{
+  uint64 buf;
+  int sz;
+
+  argaddr(0, &buf);
+  argint(1, &sz);
+  if(sz < 0) {
+    return -1;
+  }
+  if(sz > NPROC) {
+    sz = NPROC; // clamp return size to NPROC
+  }
+  struct uproc uprocs[NPROC];
+  int n = procstat(uprocs);
+  if(n < sz) {
+    sz = n; // clamp return size to valid processes
+  }
+  if(copyout(myproc()->pagetable, buf, (char *)uprocs, sz * sizeof(struct uproc)) < 0) {
+    return -1;
+  }
+  return n;
+}
