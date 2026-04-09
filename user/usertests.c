@@ -7,6 +7,8 @@
 #include "kernel/syscall.h"
 #include "kernel/memlayout.h"
 #include "kernel/riscv.h"
+#include "kernel/spinlock.h"
+#include "kernel/proc.h"
 
 //
 // Tests xv6 system calls.  usertests without arguments runs them all
@@ -37,7 +39,7 @@ copyin(char *s)
 
   for(int ai = 0; ai < sizeof(addrs)/sizeof(addrs[0]); ai++){
     uint64 addr = addrs[ai];
-    
+
     int fd = open("copyin1", O_CREATE|O_WRONLY);
     if(fd < 0){
       printf("open(copyin1) failed\n");
@@ -50,13 +52,13 @@ copyin(char *s)
     }
     close(fd);
     unlink("copyin1");
-    
+
     n = write(1, (char*)addr, 8192);
     if(n > 0){
       printf("write(1, %p, 8192) returned %d, not -1 or 0\n", (void*)addr, n);
       exit(1);
     }
-    
+
     int fds[2];
     if(pipe(fds) < 0){
       printf("pipe() failed\n");
@@ -144,7 +146,7 @@ copyinstr2(char *s)
   for(int i = 0; i < MAXPATH; i++)
     b[i] = 'x';
   b[MAXPATH] = '\0';
-  
+
   int ret = unlink(b);
   if(ret != -1){
     printf("unlink(%s) returned %d, not -1\n", b, ret);
@@ -241,20 +243,139 @@ copyinstr3(char *s)
   }
 }
 
+void
+pstat_basic(char *s)
+{
+  struct uproc uprocs[NPROC];
+  int n = pstat(uprocs, NPROC);
+  if(n <= 0){
+    printf("%s: pstat returned %d, expected > 0\n", s, n);
+    exit(1);
+  }
+
+  int found_self = 0;
+  for(int i = 0; i < n; i++){
+    if(uprocs[i].pid == getpid()){
+      found_self = 1;
+      if(strcmp(uprocs[i].name, "usertests") != 0){
+        printf("%s: self name %s unexpected\n", s, uprocs[i].name);
+        exit(1);
+      }
+      if(uprocs[i].sz == 0){
+        printf("%s: self size is zero\n", s);
+        exit(1);
+      }
+      if(uprocs[i].state < SLEEPING || uprocs[i].state > ZOMBIE){
+        printf("%s: self state %d invalid\n", s, uprocs[i].state);
+        exit(1);
+      }
+      break;
+    }
+  }
+  if(!found_self){
+    printf("%s: self not found in pstat output\n", s);
+    exit(1);
+  }
+
+  int fds[2];
+  if(pipe(fds) < 0){
+    printf("%s: pipe failed\n", s);
+    exit(1);
+  }
+
+  int pid = fork();
+  if(pid < 0){
+    printf("%s: fork failed\n", s);
+    exit(1);
+  }
+
+  if(pid == 0){
+    close(fds[1]);
+    char c;
+    if(read(fds[0], &c, 1) != 1){
+      exit(1);
+    }
+    exit(0);
+  }
+
+  close(fds[0]);
+
+  n = pstat(uprocs, NPROC);
+  if(n <= 1){
+    printf("%s: pstat returned %d after fork, expected > 1\n", s, n);
+    exit(1);
+  }
+
+  int found_child = 0;
+  for(int i = 0; i < n; i++){
+    if(uprocs[i].pid == pid){
+      found_child = 1;
+      if(uprocs[i].ppid != getpid()){
+        printf("%s: child ppid %d unexpected\n", s, uprocs[i].ppid);
+        exit(1);
+      }
+      break;
+    }
+  }
+
+  if(!found_child){
+    printf("%s: child not found in pstat output\n", s);
+    exit(1);
+  }
+
+  if(write(fds[1], "x", 1) != 1){
+    printf("%s: wake child write failed\n", s);
+    exit(1);
+  }
+  close(fds[1]);
+
+  int status;
+  wait(&status);
+  if(status != 0){
+    printf("%s: child exited with %d\n", s, status);
+    exit(1);
+  }
+  exit(0);
+}
+
+void
+pstat_badargs(char *s)
+{
+  struct uproc uprocs[NPROC];
+  int n = pstat(0, NPROC);
+  if(n != -1){
+    printf("%s: pstat(0, NPROC) returned %d, expected -1\n", s, n);
+    exit(1);
+  }
+
+  n = pstat(uprocs, -1);
+  if(n != -1){
+    printf("%s: pstat(uprocs, -1) returned %d, expected -1\n", s, n);
+    exit(1);
+  }
+
+  n = pstat(uprocs, NPROC+1);
+  if(n <= 0 || n > NPROC){
+    printf("%s: pstat(uprocs, NPROC+1) returned %d, expected 1..%d\n", s, n, NPROC);
+    exit(1);
+  }
+  exit(0);
+}
+
 // See if the kernel refuses to read/write user memory that the
 // application doesn't have anymore, because it returned it.
 void
 rwsbrk(char *s)
 {
   int fd, n;
-  
+
   uint64 a = (uint64) sbrk(8192);
 
   if(a == (uint64) SBRK_ERROR) {
     printf("sbrk(rwsbrk) failed\n");
     exit(1);
   }
-  
+
   if (sbrk(-8192) == SBRK_ERROR) {
     printf("sbrk(rwsbrk) shrink failed\n");
     exit(1);
@@ -284,7 +405,7 @@ rwsbrk(char *s)
     exit(1);
   }
   close(fd);
-  
+
   exit(0);
 }
 
@@ -293,7 +414,7 @@ void
 truncate1(char *s)
 {
   char buf[32];
-  
+
   unlink("truncfile");
   int fd1 = open("truncfile", O_CREATE|O_WRONLY|O_TRUNC);
   write(fd1, "abcd", 4);
@@ -322,7 +443,7 @@ truncate1(char *s)
     printf("%s: read %d bytes, wanted 0\n", s, n);
     exit(1);
   }
-  
+
   write(fd1, "abcdef", 6);
 
   n = read(fd3, buf, sizeof(buf));
@@ -375,7 +496,7 @@ truncate3(char *s)
   int pid, xstatus;
 
   close(open("truncfile", O_CREATE|O_TRUNC|O_WRONLY));
-  
+
   pid = fork();
   if(pid < 0){
     printf("%s: fork failed\n", s);
@@ -421,7 +542,7 @@ truncate3(char *s)
   unlink("truncfile");
   exit(xstatus);
 }
-  
+
 
 // does chdir() call iput(p->cwd) in a transaction?
 void
@@ -543,7 +664,7 @@ writetest(char *s)
   int fd;
   int i;
   enum { N=100, SZ=10 };
-  
+
   fd = open("small", O_CREATE|O_RDWR);
   if(fd < 0){
     printf("%s: error: creat small failed!\n", s);
@@ -741,7 +862,7 @@ pipe1(char *s)
   int fds[2], pid, xstatus;
   int seq, i, n, cc, total;
   enum { N=5, SZ=1033 };
-  
+
   if(pipe(fds) != 0){
     printf("%s: pipe() failed\n", s);
     exit(1);
@@ -794,7 +915,7 @@ void
 killstatus(char *s)
 {
   int xst;
-  
+
   for(int i = 0; i < 100; i++){
     int pid1 = fork();
     if(pid1 < 0){
@@ -965,7 +1086,7 @@ void
 forkfork(char *s)
 {
   enum { N=2 };
-  
+
   for(int i = 0; i < N; i++){
     int pid = fork();
     if(pid < 0){
@@ -1122,7 +1243,7 @@ sharedfd(char *s)
     if(xstatus != 0)
       exit(xstatus);
   }
-  
+
   close(fd);
   fd = open("sharedfd", 0);
   if(fd < 0){
@@ -1157,7 +1278,7 @@ fourfiles(char *s)
   char *names[] = { "f0", "f1", "f2", "f3" };
   char *fname;
   enum { N=12, NCHILD=4, SZ=500 };
-  
+
   for(pi = 0; pi < NCHILD; pi++){
     fname = names[pi];
     unlink(fname);
@@ -2015,11 +2136,11 @@ sbrkbasic(char *s)
       // it's OK if this fails.
       exit(0);
     }
-    
+
     for(b = a; b < a+TOOMUCH; b += PGSIZE){
       *b = 99;
     }
-    
+
     // we should not get here! either sbrk(TOOMUCH)
     // should have failed, or (with lazy allocation)
     // a pagefault should have killed this process.
@@ -2201,7 +2322,7 @@ sbrkfail(char *s)
   if(!failed) {
     printf("%s: no allocation failed; allocate more?\n", s);
   }
-  
+
   // if those failed allocations freed up the pages they did allocate,
   // we'll be able to allocate here
   c = sbrk(PGSIZE);
@@ -2216,7 +2337,7 @@ sbrkfail(char *s)
     exit(1);
   }
 
-  // test running fork with the above allocated page 
+  // test running fork with the above allocated page
   pid = fork();
   if(pid < 0){
     printf("%s: fork failed\n", s);
@@ -2227,7 +2348,7 @@ sbrkfail(char *s)
     a = sbrk(10*BIG);
     if(a == (char*)SBRK_ERROR){
       exit(0);
-    }   
+    }
     printf("%s: allocate a lot of memory succeeded %d\n", s, 10*BIG);
     exit(1);
   }
@@ -2236,7 +2357,7 @@ sbrkfail(char *s)
     exit(1);
 }
 
-  
+
 // test reads/writes from/to allocated memory
 void
 sbrkarg(char *s)
@@ -2262,7 +2383,7 @@ sbrkarg(char *s)
   if(pipe((int *) a) != 0){
     printf("%s: pipe() failed\n", s);
     exit(1);
-  } 
+  }
 }
 
 void
@@ -2325,7 +2446,7 @@ bigargtest(char *s)
     printf("%s: bigargtest: fork failed\n", s);
     exit(1);
   }
-  
+
   wait(&xstatus);
   if(xstatus != 0)
     exit(xstatus);
@@ -2409,7 +2530,7 @@ stacktest(char *s)
 {
   int pid;
   int xstatus;
-  
+
   pid = fork();
   if(pid == 0) {
     char *sp = (char *) r_sp();
@@ -2437,7 +2558,7 @@ nowrite(char *s)
   int xstatus;
   uint64 addrs[] = { 0, 0x80000000LL, 0x3fffffe000, 0x3ffffff000, 0x4000000000,
                      0xffffffffffffffff };
-  
+
   for(int ai = 0; ai < sizeof(addrs)/sizeof(addrs[0]); ai++){
     pid = fork();
     if(pid == 0) {
@@ -2581,7 +2702,7 @@ badarg(char *s)
     argv[1] = 0;
     exec("echo", argv);
   }
-  
+
   exit(0);
 }
 
@@ -2593,7 +2714,7 @@ void
 lazy_alloc(char *s)
 {
   char *i, *prev_end, *new_end;
-  
+
   prev_end = sbrklazy(REGION_SZ);
   if (prev_end == (char *) SBRK_ERROR) {
     printf("sbrklazy() failed\n");
@@ -2664,7 +2785,7 @@ lazy_copy(char *s)
     sbrklazy(4*PGSIZE);
     open(p + 8192, 0);
   }
-  
+
   {
     void *xx = sbrk(0);
     void *ret = sbrk(-(((uint64) xx)+1));
@@ -2674,7 +2795,7 @@ lazy_copy(char *s)
     }
   }
 
-  
+
   // read() and write() to these addresses should fail.
   unsigned long bad[] = {
     0x3fffffc000,
@@ -2757,6 +2878,8 @@ struct test {
   {copyinstr1, "copyinstr1"},
   {copyinstr2, "copyinstr2"},
   {copyinstr3, "copyinstr3"},
+  {pstat_basic, "pstat_basic"},
+  {pstat_badargs, "pstat_badargs"},
   {rwsbrk, "rwsbrk" },
   {truncate1, "truncate1"},
   {truncate2, "truncate2"},
@@ -2871,7 +2994,7 @@ manywrites(char *s)
 {
   int nchildren = 4;
   int howmany = 30; // increase to look for deadlock
-  
+
   for(int ci = 0; ci < nchildren; ci++){
     int pid = fork();
     if(pid < 0){
@@ -2885,7 +3008,7 @@ manywrites(char *s)
       name[1] = 'a' + ci;
       name[2] = '\0';
       unlink(name);
-      
+
       for(int iters = 0; iters < howmany; iters++){
         for(int i = 0; i < ci+1; i++){
           int fd = open(name, O_CREATE | O_RDWR);
@@ -2927,7 +3050,7 @@ void
 badwrite(char *s)
 {
   int assumed_free = 600;
-  
+
   unlink("junk");
   for(int i = 0; i < assumed_free; i++){
     int fd = open("junk", O_CREATE|O_WRONLY);
@@ -2979,7 +3102,7 @@ execout(char *s)
       // progress.
       for(int i = 0; i < avail; i++)
         sbrk(-PGSIZE);
-      
+
       close(1);
       char *args[] = { "echo", "x", 0 };
       exec("echo", args);
@@ -3000,7 +3123,7 @@ diskfull(char *s)
   int done = 0;
 
   unlink("diskfulldir");
-  
+
   for(fi = 0; done == 0 && '0' + fi < 0177; fi++){
     char name[32];
     name[0] = 'b';
@@ -3111,7 +3234,7 @@ struct test slowtests[] = {
   {execout, "execout"},
   {diskfull, "diskfull"},
   {outofinodes, "outofinodes"},
-    
+
   { 0, 0},
 };
 
@@ -3136,7 +3259,7 @@ run(void f(char *), char *s) {
     exit(0);
   } else {
     wait(&xstatus);
-    if(xstatus != 0) 
+    if(xstatus != 0)
       printf("FAILED\n");
     else
       printf("OK\n");
@@ -3175,7 +3298,7 @@ countfree()
     }
     n += 1;
   }
-  sbrk(-((uint64)sbrk(0) - sz0));  
+  sbrk(-((uint64)sbrk(0) - sz0));
   return n;
 }
 
