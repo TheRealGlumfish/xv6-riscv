@@ -2,6 +2,7 @@
 
 struct stat;
 struct uproc;
+struct syscall_event;
 
 // system calls
 int fork(void);
@@ -26,6 +27,8 @@ char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
 int pstat(struct uproc*, int);
+int trace(int, uint);
+int gettrace(int, struct syscall_event*, int);
 
 // ulib.c
 int stat(const char*, struct stat*);

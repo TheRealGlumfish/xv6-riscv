@@ -3,7 +3,10 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "spinlock.h"
+#include "trace.h"
+#include "procstate.h"
 #include "proc.h"
+#include "pstat.h"
 #include "defs.h"
 
 struct cpu cpus[NCPU];
@@ -163,6 +166,11 @@ freeproc(struct proc *p)
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
+  p->tracing = 0;
+  if(p->tb) {
+    kfree((void*)p->tb);
+  }
+  p->tb = 0;
   p->parent = 0;
   p->name[0] = 0;
   p->chan = 0;
@@ -586,6 +594,31 @@ wakeup(void *chan)
   }
 }
 
+// Sleep process p on channel chan, releasing and re-acquiring p->lock.
+// Caller should hold p->lock.
+void
+psleep(struct proc *p, void *chan)
+{
+  // Go to sleep.
+  p->chan = chan;
+  p->state = SLEEPING;
+
+  sched();
+
+  // Tidy up.
+  p->chan = 0;
+}
+
+// Wakeup process p sleeping on channel chan.
+// Caller should hold p->lock.
+void
+pwakeup(struct proc *p, void *chan)
+{
+  if(p->state == SLEEPING && p->chan == chan) {
+    p->state = RUNNABLE;
+  }
+}
+
 // Kill the process with the given pid.
 // The victim won't exit until it tries to return
 // to user space (see usertrap() in trap.c).
@@ -723,4 +756,92 @@ procstat(struct uproc *buf)
   }
   release(&wait_lock);
   return n;
+}
+
+// Enable or disable syscall tracing for a process.
+// Mask is a bitmask of the syscall number to trace.
+// If tracing is disabled the trace buffer is cleared.
+// Returns 0 on success, -1 on error.
+int
+ktrace(int pid, uint mask)
+{
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->state != USED && p->pid == pid) {
+      if(!p->tb && mask) {
+        p->tb = kalloc();
+        if(!p->tb) {
+          release(&p->lock);
+          return -1;
+        }
+        memset(p->tb, 0, sizeof(struct syscall_tb));
+      }
+      if(p->tb && !mask) {
+        pwakeup(p, p->tb); // Wakeup if sleeping on a full trace buffer.
+        kfree((void *)p->tb);
+        p->tb = 0;
+      }
+      p->tracing = mask;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+// Copy out up to sz events from a process to user_buf.
+// Returns the number of events copied, or -1 on error.
+int
+gettrace(int pid, uint64 user_buf, int sz)
+{
+  struct proc *caller = myproc();
+
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->state != USED && p->pid == pid) {
+      if(!p->tb) {
+        release(&p->lock);
+        return -1;
+      }
+      uint avail = p->tb->nwrite - p->tb->nread;
+      if(avail == 0) {
+        release(&p->lock);
+        return 0;
+      }
+      if(avail < (uint)sz) {
+        sz = avail;
+      }
+      // Copy out first chunk of the ring buffer
+      int start = p->tb->nread % NTRACE;
+      int first_sz = NTRACE - start;
+      if(first_sz > sz) {
+        first_sz = sz;
+      }
+      if(copyout(caller->pagetable, user_buf,
+                 (char *)(p->tb->events + start),
+                 first_sz * sizeof(struct syscall_event)) < 0) {
+        release(&p->lock);
+        return -1;
+      }
+      // Copy out second chunk of the ring buffer if necessary
+      int second_sz = sz - first_sz;
+      if(second_sz > 0) {
+        if(copyout(caller->pagetable,
+                   user_buf + first_sz * sizeof(struct syscall_event),
+                   (char *)p->tb->events,
+                   second_sz * sizeof(struct syscall_event)) < 0) {
+          release(&p->lock);
+          return -1;
+        }
+      }
+
+      p->tb->nread += sz;
+      pwakeup(p, p->tb); // Wakeup if sleeping on a full trace buffer.
+      release(&p->lock);
+      return sz;
+    }
+    release(&p->lock);
+  }
+  return -1;
 }

@@ -6,6 +6,7 @@
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
+#include "procstate.h"
 #include "proc.h"
 #include "sleeplock.h"
 

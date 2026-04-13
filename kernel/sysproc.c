@@ -4,6 +4,8 @@
 #include "param.h"
 #include "memlayout.h"
 #include "spinlock.h"
+#include "procstate.h"
+#include "pstat.h"
 #include "proc.h"
 #include "vm.h"
 
@@ -136,4 +138,30 @@ sys_pstat(void)
     return -1;
   }
   return n;
+}
+
+uint64
+sys_trace(void)
+{
+  int pid;
+  int mask;
+  argint(0, &pid);
+  argint(1, &mask);
+  return ktrace(pid, (uint)mask);
+}
+
+uint64
+sys_gettrace(void)
+{
+  int pid;
+  uint64 buf;
+  int sz;
+
+  argint(0, &pid);
+  argaddr(1, &buf);
+  argint(2, &sz);
+  if(sz < 0) {
+    return -1;
+  }
+  return gettrace(pid, buf, sz);
 }

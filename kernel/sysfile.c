@@ -10,6 +10,7 @@
 #include "param.h"
 #include "stat.h"
 #include "spinlock.h"
+#include "procstate.h"
 #include "proc.h"
 #include "fs.h"
 #include "sleeplock.h"

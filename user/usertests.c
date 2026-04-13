@@ -7,8 +7,9 @@
 #include "kernel/syscall.h"
 #include "kernel/memlayout.h"
 #include "kernel/riscv.h"
-#include "kernel/spinlock.h"
-#include "kernel/proc.h"
+#include "kernel/procstate.h"
+#include "kernel/pstat.h"
+#include "kernel/trace.h"
 
 //
 // Tests xv6 system calls.  usertests without arguments runs them all
@@ -360,6 +361,496 @@ pstat_badargs(char *s)
     exit(1);
   }
   exit(0);
+}
+
+void
+trace_basic(char *s)
+{
+  int pid = getpid();
+  int mask = 1 << SYS_getpid;
+
+  if(trace(pid, mask) < 0){
+    printf("%s: trace enable failed\n", s);
+    exit(1);
+  }
+
+  int self = getpid();
+  struct syscall_event events[8];
+  int n = gettrace(pid, events, 8);
+  if(n != 1){
+    printf("%s: gettrace returned %d, expected 1\n", s, n);
+    exit(1);
+  }
+  if(events[0].num != SYS_getpid){
+    printf("%s: first event num %d, expected SYS_getpid\n", s, events[0].num);
+    exit(1);
+  }
+  if((int)events[0].retval != self){
+    printf("%s: getpid retval %d, expected %d\n", s, (int)events[0].retval, self);
+    exit(1);
+  }
+
+  n = gettrace(pid, events, 8);
+  if(n != 0){
+    printf("%s: second gettrace returned %d, expected 0\n", s, n);
+    exit(1);
+  }
+
+  if(trace(pid, 0) < 0){
+    printf("%s: trace disable failed\n", s);
+    exit(1);
+  }
+
+  n = gettrace(pid, events, 1);
+  if(n != -1){
+    printf("%s: gettrace after disable returned %d, expected -1\n", s, n);
+    exit(1);
+  }
+}
+
+void
+trace_fork(char *s)
+{
+  int parent = getpid();
+  int mask = 1 << SYS_getpid;
+
+  if(trace(parent, mask) < 0){
+    printf("%s: parent trace enable failed\n", s);
+    exit(1);
+  }
+
+  int pid = fork();
+  if(pid < 0){
+    printf("%s: fork failed\n", s);
+    exit(1);
+  }
+
+  if(pid == 0){
+    int self = getpid();
+
+    struct syscall_event events[8];
+    if(gettrace(self, events, 1) != -1){
+      printf("%s: child should not inherit parent tracing\n", s);
+      exit(1);
+    }
+
+    if(trace(self, mask) < 0){
+      printf("%s: child trace enable failed\n", s);
+      exit(1);
+    }
+
+    getpid();
+    getpid();
+
+    int n = gettrace(self, events, 8);
+    if(n != 2){
+      printf("%s: child gettrace returned %d, expected 2\n", s, n);
+      exit(1);
+    }
+    if(events[0].num != SYS_getpid || events[1].num != SYS_getpid){
+      printf("%s: child trace returned unexpected syscalls %d, %d\n",
+             s, events[0].num, events[1].num);
+      exit(1);
+    }
+    exit(0);
+  }
+
+  int st;
+  wait(&st);
+  if(st != 0){
+    printf("%s: child failed with %d\n", s, st);
+    exit(1);
+  }
+
+  if(trace(parent, 0) < 0){
+    printf("%s: parent trace disable failed\n", s);
+    exit(1);
+  }
+}
+
+void
+trace_badargs(char *s)
+{
+  int pid = getpid();
+  struct syscall_event events[2];
+
+  if(trace(-1, 1 << SYS_getpid) != -1){
+    printf("%s: trace(-1, ...) should fail\n", s);
+    exit(1);
+  }
+
+  if(trace(pid, 0xFFFFFFFF) < 0){
+    printf("%s: trace(pid, 0xFFFFFFFF) failed\n", s);
+    exit(1);
+  }
+
+  getpid();
+  if(gettrace(pid, (struct syscall_event*)0xffffffffffffffffL, 1) != -1){
+    printf("%s: gettrace(pid, BADPTR, 1) should fail\n", s);
+    exit(1);
+  }
+
+  if(gettrace(pid, events, -1) != -1){
+    printf("%s: gettrace(pid, events, -1) should fail\n", s);
+    exit(1);
+  }
+
+  if(trace(pid, 0) < 0){
+    printf("%s: trace disable failed\n", s);
+    exit(1);
+  }
+
+  if(gettrace(pid, events, 1) != -1){
+    printf("%s: gettrace after disable should fail\n", s);
+    exit(1);
+  }
+}
+
+void
+trace_fullbuf(char *s)
+{
+  int filled[2];
+  int done[2];
+  if(pipe(filled) < 0 || pipe(done) < 0){
+    printf("%s: pipe setup failed\n", s);
+    exit(1);
+  }
+
+  int pid = fork();
+  if(pid < 0){
+    printf("%s: fork failed\n", s);
+    exit(1);
+  }
+
+  if(pid == 0){
+    close(filled[0]);
+    close(done[0]);
+    int self = getpid();
+    if(trace(self, 1 << SYS_getpid) < 0){
+      exit(1);
+    }
+
+    // Fill the trace buffer exactly.
+    for(int i = 0; i < NTRACE; i++){
+      getpid();
+    }
+
+    if(write(filled[1], "x", 1) != 1){
+      exit(1);
+    }
+
+    // One more traced syscall, this should proceed once space is available.
+    getpid();
+    if(write(done[1], "x", 1) != 1){
+      exit(1);
+    }
+    exit(0);
+  }
+
+  close(filled[1]);
+  close(done[1]);
+  char c;
+  if(read(filled[0], &c, 1) != 1){
+    printf("%s: failed waiting for child fill signal\n", s);
+    exit(1);
+  }
+  close(filled[0]);
+
+  struct syscall_event first;
+  int n1 = gettrace(pid, &first, 1);
+  if(n1 != 1){
+    printf("%s: gettrace first chunk returned %d, expected 1\n", s, n1);
+    exit(1);
+  }
+  if(first.num != SYS_getpid){
+    printf("%s: first event num %d, expected SYS_getpid\n", s, first.num);
+    exit(1);
+  }
+
+  if(read(done[0], &c, 1) != 1){
+    printf("%s: failed waiting for child completion signal\n", s);
+    exit(1);
+  }
+  close(done[0]);
+
+  struct syscall_event rest[16];
+  int total = n1;
+  while(total < NTRACE + 1){
+    int want = NTRACE + 1 - total;
+    if(want > sizeof(rest)/sizeof(rest[0]))
+      want = sizeof(rest)/sizeof(rest[0]);
+    int n2 = gettrace(pid, rest, want);
+    if(n2 < 0){
+      printf("%s: gettrace wrap chunk failed\n", s);
+      exit(1);
+    }
+    if(n2 == 0){
+      printf("%s: gettrace returned 0 unexpectedly\n", s);
+      exit(1);
+    }
+    for(int i = 0; i < n2; i++){
+      if(rest[i].num != SYS_getpid){
+        printf("%s: wrapped event %d has syscall %d, expected SYS_getpid\n",
+               s, total + i - n1, rest[i].num);
+        exit(1);
+      }
+    }
+    total += n2;
+  }
+  if(total != NTRACE + 1){
+    printf("%s: total traced events %d, expected %d\n", s, total, NTRACE + 1);
+    exit(1);
+  }
+
+  int st = 0;
+  wait(&st);
+  if(st != 0){
+    printf("%s: child exit status %d\n", s, st);
+    exit(1);
+  }
+}
+
+void
+trace_unblock(char *s)
+{
+  int filled[2];
+  if(pipe(filled) < 0){
+    printf("%s: pipe setup failed\n", s);
+    exit(1);
+  }
+
+  int pid = fork();
+  if(pid < 0){
+    printf("%s: fork failed\n", s);
+    exit(1);
+  }
+
+  if(pid == 0){
+    close(filled[0]);
+    int self = getpid();
+    if(trace(self, 1 << SYS_getpid) < 0){
+      exit(1);
+    }
+
+    for(int i = 0; i < NTRACE; i++){
+      getpid();
+    }
+
+    if(write(filled[1], "x", 1) != 1){
+      exit(1);
+    }
+
+    // Must unblock after parent disables tracing.
+    getpid();
+    exit(0);
+  }
+
+  close(filled[1]);
+  char c;
+  if(read(filled[0], &c, 1) != 1){
+    printf("%s: failed waiting for child fill signal\n", s);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+  close(filled[0]);
+
+  if(trace(pid, 0) < 0){
+    printf("%s: trace disable failed\n", s);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+
+  int state = SLEEPING;
+  struct uproc uprocs[NPROC];
+  int n;
+  int st = 0;
+  for(int i = 0; i < 200; i++){
+    n = pstat(uprocs, NPROC);
+    if(n < 0){
+      st = -1;
+    } else {
+      st = 0;
+      for(int j = 0; j < n; j++){
+        if(uprocs[j].pid == pid){
+          state = uprocs[j].state;
+          st = 1;
+          break;
+        }
+      }
+    }
+    if(st < 0){
+      printf("%s: pstat failed\n", s);
+      kill(pid);
+      wait(0);
+      exit(1);
+    }
+    if(st != 1 || state != SLEEPING){
+      break;
+    }
+    pause(1);
+  }
+
+  if(st == 1 && state == SLEEPING){
+    printf("%s: child still sleeping after trace disable\n", s);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+
+  int wst;
+  if(wait(&wst) != pid){
+    printf("%s: wait returned unexpected pid\n", s);
+    exit(1);
+  }
+  if(wst != 0){
+    printf("%s: child exit status %d\n", s, wst);
+    exit(1);
+  }
+}
+
+void
+trace_wrap(char *s)
+{
+  int filled[2];
+  if(pipe(filled) < 0){
+    printf("%s: pipe setup failed\n", s);
+    exit(1);
+  }
+
+  const int base = 100000;
+  int pid = fork();
+  if(pid < 0){
+    printf("%s: fork failed\n", s);
+    exit(1);
+  }
+
+  if(pid == 0){
+    close(filled[0]);
+    int self = getpid();
+    if(trace(self, 1 << SYS_sbrk) < 0){
+      exit(1);
+    }
+
+    // Fill with distinct a1 arguments so wrap-order corruption is detectable.
+    // a0 is overwritten by syscall return value before tracing captures args.
+    for(int i = 0; i < NTRACE; i++){
+      sys_sbrk(0, base + i);
+    }
+
+    if(write(filled[1], "x", 1) != 1){
+      exit(1);
+    }
+
+    // This event should become the newest entry after parent drains one.
+    sys_sbrk(0, base + NTRACE);
+    exit(0);
+  }
+
+  close(filled[1]);
+  char c;
+  if(read(filled[0], &c, 1) != 1){
+    printf("%s: failed waiting for child fill signal\n", s);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+  close(filled[0]);
+
+  struct syscall_event first;
+  int n1 = gettrace(pid, &first, 1);
+  if(n1 != 1){
+    printf("%s: gettrace first chunk returned %d, expected 1\n", s, n1);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+  if(first.num != SYS_sbrk || first.args[1] != base){
+    printf("%s: first event mismatch: num=%d arg1=%ld\n",
+           s, first.num, (long)first.args[1]);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+
+  int state = SLEEPING;
+  struct uproc uprocs[NPROC];
+  int n;
+  int st = 0;
+  for(int i = 0; i < 200; i++){
+    n = pstat(uprocs, NPROC);
+    if(n < 0){
+      st = -1;
+    } else {
+      st = 0;
+      for(int j = 0; j < n; j++){
+        if(uprocs[j].pid == pid){
+          state = uprocs[j].state;
+          st = 1;
+          break;
+        }
+      }
+    }
+    if(st < 0){
+      printf("%s: pstat failed\n", s);
+      kill(pid);
+      wait(0);
+      exit(1);
+    }
+    if(st == 1 && state == ZOMBIE){
+      break;
+    }
+    pause(1);
+  }
+  if(st != 1 || state != ZOMBIE){
+    printf("%s: child did not reach ZOMBIE before second drain\n", s);
+    kill(pid);
+    wait(0);
+    exit(1);
+  }
+
+  struct syscall_event rest[8];
+  int total = 0;
+  while(total < NTRACE){
+    int want = NTRACE - total;
+    if(want > sizeof(rest)/sizeof(rest[0]))
+      want = sizeof(rest)/sizeof(rest[0]);
+    int n2 = gettrace(pid, rest, want);
+    if(n2 < 0){
+      printf("%s: gettrace wrap chunk returned %d, expected >=0\n", s, n2);
+      kill(pid);
+      wait(0);
+      exit(1);
+    }
+    if(n2 == 0){
+      printf("%s: gettrace returned 0 unexpectedly\n", s);
+      kill(pid);
+      wait(0);
+      exit(1);
+    }
+    for(int i = 0; i < n2; i++){
+      int expected = (total + i < NTRACE - 1) ? (base + 1 + total + i) : (base + NTRACE);
+      if(rest[i].num != SYS_sbrk || rest[i].args[1] != expected){
+        printf("%s: wrapped event %d mismatch: num=%d arg1=%ld expected=%d\n",
+               s, total + i, rest[i].num, (long)rest[i].args[1], expected);
+        kill(pid);
+        wait(0);
+        exit(1);
+      }
+    }
+    total += n2;
+  }
+
+  int wst;
+  if(wait(&wst) != pid){
+    printf("%s: wait returned unexpected pid\n", s);
+    exit(1);
+  }
+  if(wst != 0){
+    printf("%s: child exit status %d\n", s, wst);
+    exit(1);
+  }
 }
 
 // See if the kernel refuses to read/write user memory that the
@@ -2880,6 +3371,12 @@ struct test {
   {copyinstr3, "copyinstr3"},
   {pstat_basic, "pstat_basic"},
   {pstat_badargs, "pstat_badargs"},
+  {trace_basic, "trace_basic"},
+  {trace_fork, "trace_fork"},
+  {trace_badargs, "trace_badargs"},
+  {trace_fullbuf, "trace_fullbuf"},
+  {trace_unblock, "trace_unblock"},
+  {trace_wrap, "trace_wrap"},
   {rwsbrk, "rwsbrk" },
   {truncate1, "truncate1"},
   {truncate2, "truncate2"},
