@@ -149,7 +149,8 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_serialtest\
 	$U/_ps\
-	$U/_strace
+	$U/_strace\
+	$U/_ichnos
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
@@ -162,8 +163,7 @@ clean:
 	$K/kernel fs.img \
 	mkfs/mkfs .gdbinit \
         $U/usys.S \
-	$(UPROGS) \
-	serial0.in serial0.out
+	$(UPROGS)
 
 # try to generate a unique GDB port
 GDBPORT = $(shell expr `id -u` % 5000 + 25000)
@@ -175,14 +175,16 @@ ifndef CPUS
 CPUS := 3
 endif
 
+XDG_RUNTIME_DIR ?= /tmp
+
 QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
 QEMUOPTS += -global virtio-mmio.force-legacy=false
 QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
 QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
-QEMUOPTS += -chardev pipe,id=char0,path=serial0
+QEMUOPTS += -chardev socket,id=char0,path=$(XDG_RUNTIME_DIR)/xv6-serial0.sock,server=on,wait=off
 QEMUOPTS += -device virtio-serial-device,bus=virtio-mmio-bus.1 -device virtconsole,chardev=char0
 
-qemu: check-qemu-version make-serial-pipe $K/kernel fs.img
+qemu: check-qemu-version $K/kernel fs.img
 	$(QEMU) $(QEMUOPTS)
 
 .gdbinit: .gdbinit.tmpl-riscv
@@ -200,9 +202,4 @@ check-qemu-version:
 	@if [ "$(shell echo "$(QEMU_VERSION) >= $(MIN_QEMU_VERSION)" | bc)" -eq 0 ]; then \
 		echo "ERROR: Need qemu version >= $(MIN_QEMU_VERSION)"; \
 		exit 1; \
-	fi
-
-make-serial-pipe:
-	@if [ ! -p serial0.in ] || [ ! -p serial0.out ]; then \
-		mkfifo serial0.in serial0.out; \
 	fi
