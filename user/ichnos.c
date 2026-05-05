@@ -18,6 +18,7 @@ enum req_type {
   REQ_KILL,
   REQ_TRACE,
   REQ_GETTRACE,
+  REQ_EXEC,
 };
 
 struct rpc_header {
@@ -54,6 +55,11 @@ struct trace_resp {
 } __attribute__((packed));
 
 struct gettrace_payload {
+  int pid;
+} __attribute__((packed));
+
+struct exec_resp {
+  struct rpc_header header;
   int pid;
 } __attribute__((packed));
 
@@ -187,6 +193,27 @@ main(int argc, char *argv[]) {
         struct rpc_header resp_header = { .type = REQ_GETTRACE, .len = resp_len };
         write_all(fd, &resp_header, sizeof(resp_header));
         write_all(fd, events, resp_len);
+        break;
+      }
+      case REQ_EXEC: {
+        if(req.len < 1) {
+          printf("ichnos: invalid exec request length %u\n", req.len);
+          exit(1);
+        }
+        char *file = malloc(req.len);
+        if(!file) {
+          exit(1);
+        }
+        read_all(fd, file, req.len);
+        int pid = fork(); // TODO: Check if fork can fail
+        if(pid == 0) {
+          // TODO: Add argv
+          // TODO: Add wait mechanism to avoid zombies
+          exec(file, (char*[]){ file, 0 });
+        }
+        free(file);
+        struct exec_resp resp = { .header = { .type = REQ_EXEC, .len = sizeof(int) }, .pid = pid };
+        write_all(fd, &resp, sizeof(resp));
         break;
       }
       default:
