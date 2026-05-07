@@ -23,3 +23,4 @@
 #define SYS_pstat    22
 #define SYS_trace    23
 #define SYS_gettrace 24
+#define SYS_meminfo  25

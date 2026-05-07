@@ -149,7 +149,8 @@ UPROGS=\
 	$U/_dorphan\
 	$U/_serialtest\
 	$U/_ps\
-	$U/_strace
+	$U/_strace\
+	$U/_meminfo
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

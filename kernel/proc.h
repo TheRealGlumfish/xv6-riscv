@@ -98,6 +98,12 @@ struct proc {
   // these are private to the process, so p->lock need not be held.
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
+  uint64 text_end;             // Virtual address of end of text segment
+  uint64 data_start;           // Virtual address of start of data segment
+  uint64 data_end;             // Virtual address of end of data segment
+  uint64 stack_start;          // Virtual address of start of stack segment
+  uint64 stack_args;           // Virtual address of end of stack arguments
+  uint64 heap_start;           // Virtual address of start of heap segment
   pagetable_t pagetable;       // User page table
   struct trapframe *trapframe; // data page for trampoline.S
   struct context context;      // swtch() here to run process

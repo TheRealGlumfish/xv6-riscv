@@ -5,6 +5,7 @@ struct inode;
 struct pipe;
 struct proc;
 struct uproc;
+struct meminfo;
 struct spinlock;
 struct sleeplock;
 struct stat;
@@ -107,6 +108,7 @@ void            procdump(void);
 int             procstat(struct uproc *);
 int             ktrace(int pid, uint mask);
 int             gettrace(int pid, uint64 user_buf, int sz);
+int             kmeminfo(int pid, struct meminfo *info);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

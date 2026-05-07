@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "procstate.h"
 #include "pstat.h"
+#include "meminfo.h"
 #include "proc.h"
 #include "vm.h"
 
@@ -164,4 +165,23 @@ sys_gettrace(void)
     return -1;
   }
   return gettrace(pid, buf, sz);
+}
+
+uint64
+sys_meminfo(void)
+{
+  int pid;
+  uint64 p;
+  argint(0, &pid);
+  argaddr(1, &p);
+
+  struct meminfo info;
+  int n = kmeminfo(pid, &info);
+  if(n < 0) {
+    return n;
+  }
+  if(copyout(myproc()->pagetable, p, (char *)&info, sizeof(info)) < 0) {
+    return -1;
+  }
+  return n;
 }

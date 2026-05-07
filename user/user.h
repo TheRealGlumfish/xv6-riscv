@@ -3,6 +3,7 @@
 struct stat;
 struct uproc;
 struct syscall_event;
+struct meminfo;
 
 // system calls
 int fork(void);
@@ -29,6 +30,7 @@ int uptime(void);
 int pstat(struct uproc*, int);
 int trace(int, uint);
 int gettrace(int, struct syscall_event*, int);
+int meminfo(int, struct meminfo*);
 
 // ulib.c
 int stat(const char*, struct stat*);
