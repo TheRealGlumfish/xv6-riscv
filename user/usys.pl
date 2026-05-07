@@ -45,3 +45,4 @@ entry("uptime");
 entry("pstat");
 entry("trace");
 entry("gettrace");
+entry("meminfo");

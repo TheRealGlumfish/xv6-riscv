@@ -7,6 +7,7 @@
 #include "procstate.h"
 #include "proc.h"
 #include "pstat.h"
+#include "meminfo.h"
 #include "defs.h"
 
 struct cpu cpus[NCPU];
@@ -21,6 +22,7 @@ struct spinlock pid_lock;
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
+extern pagetable_t kernel_pagetable;
 extern char trampoline[]; // trampoline.S
 
 // helps ensure that wakeups of wait()ing
@@ -165,6 +167,12 @@ freeproc(struct proc *p)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
   p->sz = 0;
+  p->text_end = 0;
+  p->data_start = 0;
+  p->data_end = 0;
+  p->stack_start = 0;
+  p->stack_args = 0;
+  p->heap_start = 0;
   p->pid = 0;
   p->tracing = 0;
   if(p->tb) {
@@ -283,6 +291,12 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->text_end = p->text_end;
+  np->data_start = p->data_start;
+  np->data_end = p->data_end;
+  np->stack_start = p->stack_start;
+  np->stack_args = p->stack_args;
+  np->heap_start = p->heap_start;
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
@@ -840,6 +854,48 @@ gettrace(int pid, uint64 user_buf, int sz)
       pwakeup(p, p->tb); // Wakeup if sleeping on a full trace buffer.
       release(&p->lock);
       return sz;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+// Populate info with the memory layout of the process with the given pid.
+// Returns 0 on success, -1 on error.
+int
+kmeminfo(int pid, struct meminfo *info)
+{
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED && p->state != USED && p->pid == pid) {
+      info->va_text_end = p->text_end;
+      info->va_data_start = p->data_start;
+      info->va_data_end = p->data_end;
+      info->va_stack_start = p->stack_start;
+      info->va_stack_args = p->stack_args;
+      info->va_heap_start = p->heap_start;
+      info->va_heap_end = p->sz;
+      uint64 stack_page_offset = walkaddr(p->pagetable, p->stack_start);
+      if(stack_page_offset == 0) { // Stack page should always be mapped.
+        release(&p->lock);
+        return -1;
+      }
+      // Stack start is always page aligned.
+      info->pa_stack_start = stack_page_offset;
+      // Stack end (exclusive) and heap start are the same.
+      info->pa_stack_end = stack_page_offset + (p->heap_start - 1) % PGSIZE + 1;
+      info->pa_stack_args = stack_page_offset + (p->stack_args - 1) % PGSIZE + 1;
+      info->pa_trapframe_start = (uint64)p->trapframe;
+      info->pa_trampoline_start = (uint64)trampoline;
+      info->va_kstack_start = p->kstack;
+      pte_t *pte = walk(kernel_pagetable, p->kstack, 0);
+      if(pte == 0 || (*pte & PTE_V) == 0) { // Kernel stack should always be mapped.
+        release(&p->lock);
+        return -1;
+      }
+      info->pa_kstack_start = PTE2PA(*pte);
+      release(&p->lock);
+      return 0;
     }
     release(&p->lock);
   }

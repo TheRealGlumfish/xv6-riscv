@@ -150,6 +150,7 @@ UPROGS=\
 	$U/_serialtest\
 	$U/_ps\
 	$U/_strace\
+	$U/_meminfo\
 	$U/_ichnos
 
 fs.img: mkfs/mkfs README $(UPROGS)

@@ -30,6 +30,8 @@ kexec(char *path, char **argv)
   char *s, *last;
   int i, off;
   uint64 argc, sz = 0, sp, ustack[MAXARG], stackbase;
+  uint64 text_end = 0, data_start = 0, data_end = 0;
+  uint64 heap_start, stack_start, stack_args;
   struct elfhdr elf;
   struct inode *ip;
   struct proghdr ph;
@@ -68,6 +70,16 @@ kexec(char *path, char **argv)
       goto bad;
     if(ph.vaddr % PGSIZE != 0)
       goto bad;
+
+    // Record the text and data segment boundaries for the meminfo system call.
+    if(ph.flags & ELF_PROG_FLAG_EXEC) {
+      text_end = ph.vaddr + ph.memsz;
+    }
+    if(ph.flags & ELF_PROG_FLAG_WRITE) {
+      data_start = ph.vaddr;
+      data_end = ph.vaddr + ph.memsz;
+    }
+
     uint64 sz1;
     if((sz1 = uvmalloc(pagetable, sz, ph.vaddr + ph.memsz, flags2perm(ph.flags))) == 0)
       goto bad;
@@ -90,9 +102,16 @@ kexec(char *path, char **argv)
   if((sz1 = uvmalloc(pagetable, sz, sz + (USERSTACK+1)*PGSIZE, PTE_W)) == 0)
     goto bad;
   sz = sz1;
+
+  // Record the heap segment boundary for the meminfo() system call.
+  heap_start = sz;
+
   uvmclear(pagetable, sz-(USERSTACK+1)*PGSIZE);
   sp = sz;
   stackbase = sp - USERSTACK*PGSIZE;
+
+  // Record the stack segment boundary for the meminfo() system call.
+  stack_start = stackbase;
 
   // Copy argument strings into new stack, remember their
   // addresses in ustack[].
@@ -117,6 +136,9 @@ kexec(char *path, char **argv)
   if(copyout(pagetable, sp, (char *)ustack, (argc+1)*sizeof(uint64)) < 0)
     goto bad;
 
+  // Record the end of the stack arguments for the meminfo() system call.
+  stack_args = sp;
+
   // a0 and a1 contain arguments to user main(argc, argv)
   // argc is returned via the system call return
   // value, which goes in a0.
@@ -134,6 +156,12 @@ kexec(char *path, char **argv)
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = ulib.c:start()
   p->trapframe->sp = sp; // initial stack pointer
+  p->text_end = text_end;
+  p->data_start = data_start;
+  p->data_end = data_end;
+  p->stack_start = stack_start;
+  p->stack_args = stack_args;
+  p->heap_start = heap_start;
   proc_freepagetable(oldpagetable, oldsz);
 
   return argc; // this ends up in a0, the first argument to main(argc, argv)
