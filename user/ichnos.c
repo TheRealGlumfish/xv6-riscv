@@ -5,6 +5,7 @@
 #include "kernel/fcntl.h"
 #include "kernel/procstate.h"
 #include "kernel/pstat.h"
+#include "kernel/meminfo.h"
 #include "kernel/param.h"
 #include "kernel/trace.h"
 
@@ -19,6 +20,7 @@ enum req_type {
   REQ_TRACE,
   REQ_GETTRACE,
   REQ_EXEC,
+  REQ_MEMINFO,
 };
 
 struct rpc_header {
@@ -61,6 +63,15 @@ struct gettrace_payload {
 struct exec_resp {
   struct rpc_header header;
   int pid;
+} __attribute__((packed));
+
+struct meminfo_payload {
+  int pid;
+} __attribute__((packed));
+
+struct meminfo_resp {
+  struct rpc_header header;
+  struct meminfo info;
 } __attribute__((packed));
 
 // Reads len bytes from if into buf handling short reads.
@@ -214,6 +225,22 @@ main(int argc, char *argv[]) {
         free(file);
         struct exec_resp resp = { .header = { .type = REQ_EXEC, .len = sizeof(int) }, .pid = pid };
         write_all(fd, &resp, sizeof(resp));
+        break;
+      }
+      case REQ_MEMINFO: {
+        if(req.len != sizeof(struct meminfo_payload)) {
+          printf("ichnos: invalid meminfo request length %u\n", req.len);
+          exit(1);
+        }
+        struct meminfo_payload payload;
+        read_all(fd, &payload, sizeof(payload));
+        struct meminfo info;
+        if(meminfo(payload.pid, &info) < 0) {
+          write_all(fd, &(struct rpc_header){ .type = REQ_MEMINFO, .len = 0 }, sizeof(struct rpc_header));
+        } else {
+          struct meminfo_resp resp = { .header = { .type = REQ_MEMINFO, .len = sizeof(struct meminfo) }, .info = info };
+          write_all(fd, &resp, sizeof(resp));
+        }
         break;
       }
       default:
