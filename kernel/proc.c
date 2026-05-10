@@ -23,7 +23,9 @@ extern void forkret(void);
 static void freeproc(struct proc *p);
 
 extern pagetable_t kernel_pagetable;
+extern char etext[];  // kernel.ld sets this to end of kernel code.
 extern char trampoline[]; // trampoline.S
+extern char end[]; // first address after kernel, defined by kernel.ld.
 
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
@@ -894,6 +896,8 @@ kmeminfo(int pid, struct meminfo *info)
         return -1;
       }
       info->pa_kstack_start = PTE2PA(*pte);
+      info->ktext_end = (uint64)etext;
+      info->kdata_end = (uint64)end;
       release(&p->lock);
       return 0;
     }
