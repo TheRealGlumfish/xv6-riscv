@@ -16,4 +16,6 @@ struct meminfo {
   uint64 pa_trampoline_start; // Physical address of start of trampoline
   uint64 va_kstack_start;     // Virtual address of start of kernel stack
   uint64 pa_kstack_start;     // Physical address of start of kernel stack
+  uint64 ktext_end;           // Address of end of kernel text segment
+  uint64 kdata_end;           // Address of end of kernel data segment
 };
