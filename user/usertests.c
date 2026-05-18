@@ -10,6 +10,7 @@
 #include "kernel/procstate.h"
 #include "kernel/pstat.h"
 #include "kernel/trace.h"
+#include "kernel/meminfo.h"
 
 //
 // Tests xv6 system calls.  usertests without arguments runs them all
@@ -3360,10 +3361,132 @@ lazy_sbrk(char *s)
   exit(0);
 }
 
+void
+meminfotest(char *s)
+{
+  struct meminfo minfo;
+  if(meminfo(getpid(), &minfo) < 0){
+    printf("%s: initial meminfo failed\n", s);
+    exit(1);
+  }
+
+  uint64 init_heap_end = minfo.va_heap_end;
+
+  if (sbrk(4096) == (char*)-1) {
+    printf("%s: sbrk failed\n", s);
+    exit(1);
+  }
+
+  if(meminfo(getpid(), &minfo) < 0){
+    printf("%s: meminfo after sbrk failed\n", s);
+    exit(1);
+  }
+
+  if(minfo.va_heap_end != init_heap_end + 4096){
+    printf("%s: heap_end didn't increase by 4096\n", s);
+    exit(1);
+  }
+
+  struct meminfo minfo2;
+  int pid = fork();
+  if(pid < 0) {
+    printf("%s: fork failed\n", s);
+    exit(1);
+  } else if (pid == 0){
+    exit(0);
+  } else {
+    // try meminfo on child.
+    if(meminfo(pid, &minfo2) < 0){
+      printf("%s: meminfo on child failed\n", s);
+      exit(1);
+    }
+    wait(0);
+    // check va_heap_end is same in child.
+    if(minfo.va_heap_end != minfo2.va_heap_end){
+      printf("%s: child heap end differs from parent\n", s);
+      exit(1);
+    }
+  }
+}
+
+void
+meminfo_badargs(char *s)
+{
+  struct meminfo m;
+  // non-existent pid should return -1.
+  if(meminfo(99999, &m) != -1){
+    printf("%s: meminfo(non-existent pid) did not fail\n", s);
+    exit(1);
+  }
+
+  // meminfo with an invalid pointer should fail
+  // and return -1 on copyout() failure.
+  if(meminfo(getpid(), (struct meminfo*)0x1) != -1){
+    printf("%s: meminfo(bad ptr) did not fail\n", s);
+    exit(1);
+  }
+}
+
+void
+meminfo_fields(char *s)
+{
+  struct meminfo m;
+  if(meminfo(getpid(), &m) < 0){
+    printf("%s: meminfo failed\n", s);
+    exit(1);
+  }
+
+  if(m.va_text_end <= 0){
+    printf("%s: va_text_end <= 0\n", s);
+    exit(1);
+  }
+  if(!(m.va_text_end <= m.va_data_start)){
+    printf("%s: va_text_end > va_data_start\n", s);
+    exit(1);
+  }
+  if(!(m.va_data_start <= m.va_data_end)){
+    printf("%s: va_data_start > va_data_end\n", s);
+    exit(1);
+  }
+  if(!(m.va_stack_start < m.va_heap_start)){
+    printf("%s: va_stack_start >= va_heap_start\n", s);
+    exit(1);
+  }
+  if(!(m.va_stack_start <= m.va_stack_args && m.va_stack_args < m.va_heap_start)){
+    printf("%s: va_stack_args out of bounds\n", s);
+    exit(1);
+  }
+  if(!(m.va_heap_start <= m.va_heap_end)){
+    printf("%s: va_heap_start > va_heap_end\n", s);
+    exit(1);
+  }
+
+  if(m.pa_stack_start == 0 || m.pa_stack_end == 0 || m.pa_stack_args == 0){
+    printf("%s: stack physical addresses missing\n", s);
+    exit(1);
+  }
+  if(m.pa_kstack_start == 0){
+    printf("%s: kstack physical address missing\n", s);
+    exit(1);
+  }
+  if(m.pa_trapframe_start == 0 || m.pa_trampoline_start == 0){
+    printf("%s: trapframe/trampoline physical addresses missing\n", s);
+    exit(1);
+  }
+
+  if(!(m.kdata_end >= m.ktext_end)){
+    printf("%s: kdata_end < ktext_end\n", s);
+    exit(1);
+  }
+}
+
 struct test {
   void (*f)(char *);
   char *s;
 } quicktests[] = {
+  {meminfotest, "meminfotest"},
+  {meminfo_badargs, "meminfo_badargs"},
+  {meminfo_fields, "meminfo_fields"},
   {copyin, "copyin"},
   {copyout, "copyout"},
   {copyinstr1, "copyinstr1"},

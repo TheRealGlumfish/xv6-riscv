@@ -178,6 +178,10 @@ syscall(void)
         p->tb->events[p->tb->nwrite % NTRACE].args[i] = argraw(i);
       }
       p->tb->events[p->tb->nwrite % NTRACE].retval = retval;
+      p->tb->events[p->tb->nwrite % NTRACE].pc = p->trapframe->epc;
+      p->tb->events[p->tb->nwrite % NTRACE].sp = p->trapframe->sp;
+      p->tb->events[p->tb->nwrite % NTRACE].kpc = (uint64)syscalls[num];
+      p->tb->events[p->tb->nwrite % NTRACE].ksp = p->trapframe->kernel_sp;
       p->tb->nwrite += 1;
       release(&p->lock);
     }
